@@ -71,7 +71,9 @@ class _ItemListScreenState extends State<ItemListScreen> {
           ),
         ],
       ),
-      body: Column(
+      body: SafeArea(
+        bottom: true,
+        child: Column(
         children: [
           // Search & Filter Header
           Padding(
@@ -147,6 +149,7 @@ class _ItemListScreenState extends State<ItemListScreen> {
           ),
         ],
       ),
+    ),
     );
   }
 

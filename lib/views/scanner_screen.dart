@@ -1,7 +1,8 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
-import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:provider/provider.dart';
+import 'package:qr_code_scanner_plus/qr_code_scanner_plus.dart';
 import '../providers/sku_provider.dart';
 import '../services/audio_feedback_service.dart';
 import 'scan_result_dialog.dart';
@@ -14,100 +15,84 @@ class ScannerScreen extends StatefulWidget {
 }
 
 class _ScannerScreenState extends State<ScannerScreen> with WidgetsBindingObserver {
-  late MobileScannerController controller;
+  final GlobalKey qrKey = GlobalKey(debugLabel: 'QR');
+  QRViewController? controller;
 
   bool _isProcessing = false;
   bool _torchOn = false;
   bool _hasPermission = false;
   bool _isCheckingPermission = true;
-  String? _initError;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-
-    controller = MobileScannerController(
-      detectionSpeed: DetectionSpeed.normal,
-      facing: CameraFacing.back,
-      torchEnabled: false,
-      returnImage: false,
-    );
-
-    _initCamera();
+    _checkCameraPermission();
   }
 
-  Future<void> _initCamera() async {
-    try {
-      final status = await Permission.camera.status;
-      if (status.isGranted) {
-        _onPermissionGranted();
-      } else {
-        final requested = await Permission.camera.request();
-        if (requested.isGranted) {
-          _onPermissionGranted();
-        } else {
-          if (mounted) {
-            setState(() {
-              _hasPermission = false;
-              _isCheckingPermission = false;
-            });
-          }
-        }
-      }
-    } catch (e) {
+  // Hot reload fix for Android camera view
+  @override
+  void reassemble() {
+    super.reassemble();
+    if (Platform.isAndroid) {
+      controller?.pauseCamera();
+    }
+    controller?.resumeCamera();
+  }
+
+  Future<void> _checkCameraPermission() async {
+    final status = await Permission.camera.status;
+    if (status.isGranted) {
       if (mounted) {
         setState(() {
-          _initError = e.toString();
+          _hasPermission = true;
+          _isCheckingPermission = false;
+        });
+      }
+    } else {
+      final requested = await Permission.camera.request();
+      if (mounted) {
+        setState(() {
+          _hasPermission = requested.isGranted;
           _isCheckingPermission = false;
         });
       }
     }
   }
 
-  void _onPermissionGranted() {
-    if (!mounted) return;
-    setState(() {
-      _hasPermission = true;
-      _isCheckingPermission = false;
-    });
-
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) {
-        try {
-          controller.start();
-        } catch (_) {}
-      }
-    });
-  }
-
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (!mounted || !_hasPermission) return;
     if (state == AppLifecycleState.resumed) {
-      controller.start();
+      controller?.resumeCamera();
     } else if (state == AppLifecycleState.paused || state == AppLifecycleState.inactive) {
-      controller.stop();
+      controller?.pauseCamera();
     }
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    controller.dispose();
     super.dispose();
   }
 
-  void _onDetect(BarcodeCapture capture) async {
-    if (_isProcessing) return;
+  void _onQRViewCreated(QRViewController controller) {
+    this.controller = controller;
+    controller.scannedDataStream.listen((scanData) {
+      if (_isProcessing) return;
+      final rawBarcode = scanData.code;
+      if (rawBarcode != null && rawBarcode.trim().isNotEmpty) {
+        _processBarcode(rawBarcode.trim());
+      }
+    });
+  }
 
-    final List<Barcode> barcodes = capture.barcodes;
-    if (barcodes.isEmpty) return;
-
-    final rawBarcode = barcodes.first.rawValue ?? barcodes.first.displayValue;
-    if (rawBarcode == null || rawBarcode.trim().isEmpty) return;
-
-    _processBarcode(rawBarcode.trim());
+  void _onPermissionSet(BuildContext context, QRViewController ctrl, bool p) {
+    if (!p && mounted) {
+      setState(() {
+        _hasPermission = false;
+      });
+    }
   }
 
   Future<void> _processBarcode(String barcode) async {
@@ -156,11 +141,10 @@ class _ScannerScreenState extends State<ScannerScreen> with WidgetsBindingObserv
         ),
         actions: [
           TextButton(
-            child: const Text('CANCEL'),
             onPressed: () => Navigator.pop(ctx),
+            child: const Text('CANCEL'),
           ),
           ElevatedButton(
-            child: const Text('LOOKUP'),
             onPressed: () {
               final val = textController.text.trim();
               Navigator.pop(ctx);
@@ -168,6 +152,7 @@ class _ScannerScreenState extends State<ScannerScreen> with WidgetsBindingObserv
                 _processBarcode(val);
               }
             },
+            child: const Text('LOOKUP'),
           ),
         ],
       ),
@@ -193,26 +178,25 @@ class _ScannerScreenState extends State<ScannerScreen> with WidgetsBindingObserv
       return _buildPermissionDeniedView();
     }
 
-    if (_initError != null) {
-      return _buildErrorView(_initError!);
-    }
-
-    // ONLY mount MobileScanner widget when camera permission is explicitly granted!
     return Stack(
       children: [
-        MobileScanner(
-          controller: controller,
-          onDetect: _onDetect,
-          errorBuilder: (context, error, child) {
-            return _buildCameraErrorView(error);
-          },
+        // QR / Barcode Camera Feed
+        QRView(
+          key: qrKey,
+          onQRViewCreated: _onQRViewCreated,
+          overlay: QrScannerOverlayShape(
+            borderColor: _isProcessing ? Colors.orange : Colors.green.shade400,
+            borderRadius: 16,
+            borderLength: 30,
+            borderWidth: 8,
+            cutOutSize: 280,
+          ),
+          onPermissionSet: (ctrl, p) => _onPermissionSet(context, ctrl, p),
         ),
 
-        // Viewfinder reticle overlay
-        _buildReticleOverlay(),
-
-        // Top Control Bar
+        // Top Control Bar (SafeArea protected)
         SafeArea(
+          top: true,
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 12.0),
             child: Row(
@@ -234,11 +218,14 @@ class _ScannerScreenState extends State<ScannerScreen> with WidgetsBindingObserv
                           _torchOn ? Icons.flash_on : Icons.flash_off,
                           color: _torchOn ? Colors.amber : Colors.white,
                         ),
-                        onPressed: () {
-                          controller.toggleTorch();
-                          setState(() {
-                            _torchOn = !_torchOn;
-                          });
+                        onPressed: () async {
+                          await controller?.toggleFlash();
+                          final status = await controller?.getFlashStatus();
+                          if (mounted) {
+                            setState(() {
+                              _torchOn = status ?? !_torchOn;
+                            });
+                          }
                         },
                       ),
                     ),
@@ -247,7 +234,9 @@ class _ScannerScreenState extends State<ScannerScreen> with WidgetsBindingObserv
                       backgroundColor: Colors.black54,
                       child: IconButton(
                         icon: const Icon(Icons.cameraswitch, color: Colors.white),
-                        onPressed: () => controller.switchCamera(),
+                        onPressed: () async {
+                          await controller?.flipCamera();
+                        },
                       ),
                     ),
                     const SizedBox(width: 8),
@@ -266,28 +255,34 @@ class _ScannerScreenState extends State<ScannerScreen> with WidgetsBindingObserv
           ),
         ),
 
-        // Bottom Instruction Bar
+        // Bottom Instruction Bar (SafeArea bottom protected from Android nav bar)
         Positioned(
-          bottom: 40,
-          left: 20,
-          right: 20,
-          child: Container(
-            padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
-            decoration: BoxDecoration(
-              color: Colors.black54,
-              borderRadius: BorderRadius.circular(30),
-              border: Border.all(color: Colors.white24),
-            ),
-            child: const Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Icon(Icons.center_focus_weak, color: Colors.green, size: 20),
-                SizedBox(width: 8),
-                Text(
-                  'Point camera at item barcode',
-                  style: TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w500),
+          bottom: 0,
+          left: 0,
+          right: 0,
+          child: SafeArea(
+            bottom: true,
+            child: Padding(
+              padding: const EdgeInsets.only(left: 20, right: 20, bottom: 20),
+              child: Container(
+                padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
+                decoration: BoxDecoration(
+                  color: Colors.black54,
+                  borderRadius: BorderRadius.circular(30),
+                  border: Border.all(color: Colors.white24),
                 ),
-              ],
+                child: const Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(Icons.center_focus_weak, color: Colors.green, size: 20),
+                    SizedBox(width: 8),
+                    Text(
+                      'Point camera at item barcode',
+                      style: TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w500),
+                    ),
+                  ],
+                ),
+              ),
             ),
           ),
         ),
@@ -296,168 +291,52 @@ class _ScannerScreenState extends State<ScannerScreen> with WidgetsBindingObserv
   }
 
   Widget _buildPermissionDeniedView() {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(24.0),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            const Icon(Icons.camera_alt_outlined, size: 64, color: Colors.amber),
-            const SizedBox(height: 16),
-            const Text(
-              'Camera Permission Required',
-              style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Colors.white),
-              textAlign: TextAlign.center,
-            ),
-            const SizedBox(height: 12),
-            const Text(
-              'MIDI SKU Finder requires access to your camera to scan item barcodes.',
-              style: TextStyle(color: Colors.white70, fontSize: 14),
-              textAlign: TextAlign.center,
-            ),
-            const SizedBox(height: 24),
-            ElevatedButton.icon(
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.teal,
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
-              ),
-              icon: const Icon(Icons.settings),
-              label: const Text('GRANT CAMERA PERMISSION'),
-              onPressed: () async {
-                final status = await Permission.camera.request();
-                if (status.isPermanentlyDenied) {
-                  await openAppSettings();
-                } else if (status.isGranted) {
-                  _onPermissionGranted();
-                }
-              },
-            ),
-            const SizedBox(height: 12),
-            TextButton(
-              onPressed: _showManualBarcodeDialog,
-              child: const Text('Enter Barcode Manually', style: TextStyle(color: Colors.white70)),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildCameraErrorView(MobileScannerException error) {
-    String errorMsg = error.errorDetails?.message ?? error.errorCode.name;
-    if (error.errorCode == MobileScannerErrorCode.permissionDenied) {
-      errorMsg = 'Camera permission denied.';
-    }
-
-    return Container(
-      color: Colors.black,
-      padding: const EdgeInsets.all(24.0),
+    return SafeArea(
+      bottom: true,
       child: Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            const Icon(Icons.error_outline, size: 60, color: Colors.redAccent),
-            const SizedBox(height: 16),
-            const Text(
-              'Camera Error',
-              style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Colors.white),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              'Code: ${error.errorCode.name}\nDetails: $errorMsg',
-              style: const TextStyle(color: Colors.white70, fontSize: 13),
-              textAlign: TextAlign.center,
-            ),
-            const SizedBox(height: 24),
-            ElevatedButton.icon(
-              style: ElevatedButton.styleFrom(backgroundColor: Colors.teal, foregroundColor: Colors.white),
-              icon: const Icon(Icons.refresh),
-              label: const Text('RETRY CAMERA'),
-              onPressed: () {
-                controller.start();
-                setState(() {});
-              },
-            ),
-            const SizedBox(height: 8),
-            OutlinedButton.icon(
-              style: OutlinedButton.styleFrom(foregroundColor: Colors.white),
-              icon: const Icon(Icons.keyboard),
-              label: const Text('USE MANUAL BARCODE ENTRY'),
-              onPressed: _showManualBarcodeDialog,
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildErrorView(String message) {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(24.0),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            const Icon(Icons.warning_amber_rounded, size: 60, color: Colors.amber),
-            const SizedBox(height: 16),
-            const Text(
-              'Initialization Error',
-              style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Colors.white),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              message,
-              style: const TextStyle(color: Colors.white70, fontSize: 13),
-              textAlign: TextAlign.center,
-            ),
-            const SizedBox(height: 24),
-            ElevatedButton(
-              style: ElevatedButton.styleFrom(backgroundColor: Colors.teal),
-              onPressed: () {
-                setState(() {
-                  _initError = null;
-                  _isCheckingPermission = true;
-                });
-                _initCamera();
-              },
-              child: const Text('RETRY', style: TextStyle(color: Colors.white)),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildReticleOverlay() {
-    return Center(
-      child: Container(
-        width: 280,
-        height: 200,
-        decoration: BoxDecoration(
-          border: Border.all(
-            color: _isProcessing ? Colors.orange : Colors.green.shade400,
-            width: 3,
-          ),
-          borderRadius: BorderRadius.circular(16),
-          boxShadow: [
-            BoxShadow(
-              color: (_isProcessing ? Colors.orange : Colors.green).withValues(alpha: 0.2),
-              blurRadius: 16,
-              spreadRadius: 4,
-            ),
-          ],
-        ),
-        child: Stack(
-          children: [
-            // Center scanning line animation effect
-            Center(
-              child: Container(
-                height: 2,
-                color: Colors.redAccent.withValues(alpha: 0.8),
+        child: Padding(
+          padding: const EdgeInsets.all(24.0),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Icon(Icons.camera_alt_outlined, size: 64, color: Colors.amber),
+              const SizedBox(height: 16),
+              const Text(
+                'Camera Permission Required',
+                style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Colors.white),
+                textAlign: TextAlign.center,
               ),
-            ),
-          ],
+              const SizedBox(height: 12),
+              const Text(
+                'MIDI SKU Finder requires access to your camera to scan item barcodes.',
+                style: TextStyle(color: Colors.white70, fontSize: 14),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 24),
+              ElevatedButton.icon(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.teal,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
+                ),
+                icon: const Icon(Icons.settings),
+                label: const Text('GRANT CAMERA PERMISSION'),
+                onPressed: () async {
+                  final status = await Permission.camera.request();
+                  if (status.isPermanentlyDenied) {
+                    await openAppSettings();
+                  } else if (status.isGranted) {
+                    _checkCameraPermission();
+                  }
+                },
+              ),
+              const SizedBox(height: 12),
+              TextButton(
+                onPressed: _showManualBarcodeDialog,
+                child: const Text('Enter Barcode Manually', style: TextStyle(color: Colors.white70)),
+              ),
+            ],
+          ),
         ),
       ),
     );

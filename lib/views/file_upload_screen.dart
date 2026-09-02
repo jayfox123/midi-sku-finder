@@ -96,11 +96,13 @@ class _FileUploadScreenState extends State<FileUploadScreen> {
       appBar: AppBar(
         title: const Text('Add Excel / CSV File'),
       ),
-      body: provider.isImporting
-          ? _buildImportProgressView(provider)
-          : SingleChildScrollView(
-              padding: const EdgeInsets.all(16.0),
-              child: Column(
+      body: SafeArea(
+        bottom: true,
+        child: provider.isImporting
+            ? _buildImportProgressView(provider)
+            : SingleChildScrollView(
+                padding: const EdgeInsets.all(16.0),
+                child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   // File Picker Section
@@ -321,6 +323,7 @@ class _FileUploadScreenState extends State<FileUploadScreen> {
                 ],
               ),
             ),
+      ),
     );
   }
 

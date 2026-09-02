@@ -138,27 +138,30 @@ class _ScanResultDialogState extends State<ScanResultDialog> {
             child: isMatch ? _buildMatchDetails(context) : _buildNoMatchDetails(context),
           ),
 
-          // Bottom Action Button
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 20.0),
-            child: ElevatedButton.icon(
-              style: ElevatedButton.styleFrom(
-                backgroundColor: isMatch ? Colors.green.shade800 : Colors.blue.shade800,
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(vertical: 14),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
+          // Bottom Action Button (SafeArea protected from Android nav bar)
+          SafeArea(
+            bottom: true,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 20.0),
+              child: ElevatedButton.icon(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: isMatch ? Colors.green.shade800 : Colors.blue.shade800,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
                 ),
+                icon: const Icon(Icons.qr_code_scanner),
+                label: const Text(
+                  'SCAN NEXT ITEM',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                ),
+                onPressed: () {
+                  Navigator.pop(context);
+                  widget.onScanNext();
+                },
               ),
-              icon: const Icon(Icons.qr_code_scanner),
-              label: const Text(
-                'SCAN NEXT ITEM',
-                style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-              ),
-              onPressed: () {
-                Navigator.pop(context);
-                widget.onScanNext();
-              },
             ),
           ),
           const SizedBox(height: 12),
