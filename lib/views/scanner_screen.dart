@@ -13,48 +13,88 @@ class ScannerScreen extends StatefulWidget {
   State<ScannerScreen> createState() => _ScannerScreenState();
 }
 
-class _ScannerScreenState extends State<ScannerScreen> {
-  late MobileScannerController _controller;
+class _ScannerScreenState extends State<ScannerScreen> with WidgetsBindingObserver {
+  late MobileScannerController controller;
 
   bool _isProcessing = false;
   bool _torchOn = false;
-  PermissionStatus _cameraPermissionStatus = PermissionStatus.denied;
+  bool _hasPermission = false;
   bool _isCheckingPermission = true;
+  String? _initError;
 
   @override
   void initState() {
     super.initState();
-    _controller = MobileScannerController(
-      detectionSpeed: DetectionSpeed.noDuplicates,
+    WidgetsBinding.instance.addObserver(this);
+
+    controller = MobileScannerController(
+      detectionSpeed: DetectionSpeed.normal,
       facing: CameraFacing.back,
       torchEnabled: false,
+      returnImage: false,
     );
-    _checkCameraPermission();
+
+    _initCamera();
   }
 
-  Future<void> _checkCameraPermission() async {
-    final status = await Permission.camera.status;
-    if (status.isGranted) {
-      if (mounted) {
-        setState(() {
-          _cameraPermissionStatus = status;
-          _isCheckingPermission = false;
-        });
+  Future<void> _initCamera() async {
+    try {
+      final status = await Permission.camera.status;
+      if (status.isGranted) {
+        _onPermissionGranted();
+      } else {
+        final requested = await Permission.camera.request();
+        if (requested.isGranted) {
+          _onPermissionGranted();
+        } else {
+          if (mounted) {
+            setState(() {
+              _hasPermission = false;
+              _isCheckingPermission = false;
+            });
+          }
+        }
       }
-    } else {
-      final requested = await Permission.camera.request();
+    } catch (e) {
       if (mounted) {
         setState(() {
-          _cameraPermissionStatus = requested;
+          _initError = e.toString();
           _isCheckingPermission = false;
         });
       }
     }
   }
 
+  void _onPermissionGranted() {
+    if (!mounted) return;
+    setState(() {
+      _hasPermission = true;
+      _isCheckingPermission = false;
+    });
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        try {
+          controller.start();
+        } catch (_) {}
+      }
+    });
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (!mounted || !_hasPermission) return;
+    if (state == AppLifecycleState.resumed) {
+      controller.start();
+    } else if (state == AppLifecycleState.paused || state == AppLifecycleState.inactive) {
+      controller.stop();
+    }
+  }
+
   @override
   void dispose() {
-    _controller.dispose();
+    WidgetsBinding.instance.removeObserver(this);
+    controller.dispose();
     super.dispose();
   }
 
@@ -138,108 +178,120 @@ class _ScannerScreenState extends State<ScannerScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.black,
-      body: _isCheckingPermission
-          ? const Center(
-              child: CircularProgressIndicator(color: Colors.teal),
-            )
-          : !_cameraPermissionStatus.isGranted
-              ? _buildPermissionDeniedView()
-              : Stack(
+      body: _buildBody(),
+    );
+  }
+
+  Widget _buildBody() {
+    if (_isCheckingPermission) {
+      return const Center(
+        child: CircularProgressIndicator(color: Colors.teal),
+      );
+    }
+
+    if (!_hasPermission) {
+      return _buildPermissionDeniedView();
+    }
+
+    if (_initError != null) {
+      return _buildErrorView(_initError!);
+    }
+
+    // ONLY mount MobileScanner widget when camera permission is explicitly granted!
+    return Stack(
+      children: [
+        MobileScanner(
+          controller: controller,
+          onDetect: _onDetect,
+          errorBuilder: (context, error, child) {
+            return _buildCameraErrorView(error);
+          },
+        ),
+
+        // Viewfinder reticle overlay
+        _buildReticleOverlay(),
+
+        // Top Control Bar
+        SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 12.0),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                CircleAvatar(
+                  backgroundColor: Colors.black54,
+                  child: IconButton(
+                    icon: const Icon(Icons.arrow_back, color: Colors.white),
+                    onPressed: () => Navigator.pop(context),
+                  ),
+                ),
+                Row(
                   children: [
-                    // Live Camera Feed with detailed error builder
-                    MobileScanner(
-                      controller: _controller,
-                      onDetect: _onDetect,
-                      errorBuilder: (context, error, child) {
-                        return _buildCameraErrorView(error);
-                      },
-                    ),
-
-                    // Viewfinder reticle overlay
-                    _buildReticleOverlay(),
-
-                    // Top Control Bar
-                    SafeArea(
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 12.0),
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            CircleAvatar(
-                              backgroundColor: Colors.black54,
-                              child: IconButton(
-                                icon: const Icon(Icons.arrow_back, color: Colors.white),
-                                onPressed: () => Navigator.pop(context),
-                              ),
-                            ),
-                            Row(
-                              children: [
-                                CircleAvatar(
-                                  backgroundColor: Colors.black54,
-                                  child: IconButton(
-                                    icon: Icon(
-                                      _torchOn ? Icons.flash_on : Icons.flash_off,
-                                      color: _torchOn ? Colors.amber : Colors.white,
-                                    ),
-                                    onPressed: () {
-                                      _controller.toggleTorch();
-                                      setState(() {
-                                        _torchOn = !_torchOn;
-                                      });
-                                    },
-                                  ),
-                                ),
-                                const SizedBox(width: 8),
-                                CircleAvatar(
-                                  backgroundColor: Colors.black54,
-                                  child: IconButton(
-                                    icon: const Icon(Icons.cameraswitch, color: Colors.white),
-                                    onPressed: () => _controller.switchCamera(),
-                                  ),
-                                ),
-                                const SizedBox(width: 8),
-                                CircleAvatar(
-                                  backgroundColor: Colors.black54,
-                                  child: IconButton(
-                                    icon: const Icon(Icons.edit_note, color: Colors.white),
-                                    tooltip: 'Manual Entry',
-                                    onPressed: _showManualBarcodeDialog,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ],
+                    CircleAvatar(
+                      backgroundColor: Colors.black54,
+                      child: IconButton(
+                        icon: Icon(
+                          _torchOn ? Icons.flash_on : Icons.flash_off,
+                          color: _torchOn ? Colors.amber : Colors.white,
                         ),
+                        onPressed: () {
+                          controller.toggleTorch();
+                          setState(() {
+                            _torchOn = !_torchOn;
+                          });
+                        },
                       ),
                     ),
-
-                    // Bottom Instruction Bar
-                    Positioned(
-                      bottom: 40,
-                      left: 20,
-                      right: 20,
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
-                        decoration: BoxDecoration(
-                          color: Colors.black54,
-                          borderRadius: BorderRadius.circular(30),
-                          border: Border.all(color: Colors.white24),
-                        ),
-                        child: const Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Icon(Icons.center_focus_weak, color: Colors.green, size: 20),
-                            SizedBox(width: 8),
-                            Text(
-                              'Point camera at item barcode',
-                              style: TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w500),
-                            ),
-                          ],
-                        ),
+                    const SizedBox(width: 8),
+                    CircleAvatar(
+                      backgroundColor: Colors.black54,
+                      child: IconButton(
+                        icon: const Icon(Icons.cameraswitch, color: Colors.white),
+                        onPressed: () => controller.switchCamera(),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    CircleAvatar(
+                      backgroundColor: Colors.black54,
+                      child: IconButton(
+                        icon: const Icon(Icons.edit_note, color: Colors.white),
+                        tooltip: 'Manual Entry',
+                        onPressed: _showManualBarcodeDialog,
                       ),
                     ),
                   ],
                 ),
+              ],
+            ),
+          ),
+        ),
+
+        // Bottom Instruction Bar
+        Positioned(
+          bottom: 40,
+          left: 20,
+          right: 20,
+          child: Container(
+            padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
+            decoration: BoxDecoration(
+              color: Colors.black54,
+              borderRadius: BorderRadius.circular(30),
+              border: Border.all(color: Colors.white24),
+            ),
+            child: const Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(Icons.center_focus_weak, color: Colors.green, size: 20),
+                SizedBox(width: 8),
+                Text(
+                  'Point camera at item barcode',
+                  style: TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w500),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
     );
   }
 
@@ -276,8 +328,8 @@ class _ScannerScreenState extends State<ScannerScreen> {
                 final status = await Permission.camera.request();
                 if (status.isPermanentlyDenied) {
                   await openAppSettings();
-                } else {
-                  _checkCameraPermission();
+                } else if (status.isGranted) {
+                  _onPermissionGranted();
                 }
               },
             ),
@@ -323,7 +375,7 @@ class _ScannerScreenState extends State<ScannerScreen> {
               icon: const Icon(Icons.refresh),
               label: const Text('RETRY CAMERA'),
               onPressed: () {
-                _controller.start();
+                controller.start();
                 setState(() {});
               },
             ),
@@ -333,6 +385,43 @@ class _ScannerScreenState extends State<ScannerScreen> {
               icon: const Icon(Icons.keyboard),
               label: const Text('USE MANUAL BARCODE ENTRY'),
               onPressed: _showManualBarcodeDialog,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildErrorView(String message) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24.0),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const Icon(Icons.warning_amber_rounded, size: 60, color: Colors.amber),
+            const SizedBox(height: 16),
+            const Text(
+              'Initialization Error',
+              style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Colors.white),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              message,
+              style: const TextStyle(color: Colors.white70, fontSize: 13),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 24),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(backgroundColor: Colors.teal),
+              onPressed: () {
+                setState(() {
+                  _initError = null;
+                  _isCheckingPermission = true;
+                });
+                _initCamera();
+              },
+              child: const Text('RETRY', style: TextStyle(color: Colors.white)),
             ),
           ],
         ),
