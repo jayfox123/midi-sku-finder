@@ -73,7 +73,9 @@ class _ScanResultDialogState extends State<ScanResultDialog> {
 
   @override
   Widget build(BuildContext context) {
+    final skuProvider = Provider.of<SkuProvider>(context);
     final isMatch = _currentItem != null;
+    final isDiscount = skuProvider.isDiscountMode;
 
     return Container(
       decoration: BoxDecoration(
@@ -107,7 +109,9 @@ class _ScanResultDialogState extends State<ScanResultDialog> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        isMatch ? 'MATCH FOUND IN LIST' : 'NOT ON DISCOUNT LIST',
+                        isMatch
+                            ? (isDiscount ? 'PROMO MATCH FOUND' : 'INVENTORY ITEM MATCH')
+                            : 'ITEM NOT ON LIST',
                         style: const TextStyle(
                           color: Colors.white,
                           fontWeight: FontWeight.bold,
@@ -135,7 +139,7 @@ class _ScanResultDialogState extends State<ScanResultDialog> {
 
           Padding(
             padding: const EdgeInsets.all(20.0),
-            child: isMatch ? _buildMatchDetails(context) : _buildNoMatchDetails(context),
+            child: isMatch ? _buildMatchDetails(context, skuProvider) : _buildNoMatchDetails(context),
           ),
 
           // Bottom Action Button (SafeArea protected from Android nav bar)
@@ -170,8 +174,9 @@ class _ScanResultDialogState extends State<ScanResultDialog> {
     );
   }
 
-  Widget _buildMatchDetails(BuildContext context) {
+  Widget _buildMatchDetails(BuildContext context, SkuProvider provider) {
     final item = _currentItem!;
+    final isDiscount = provider.isDiscountMode && (item.discountPrice != null || item.originalPrice != null);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -204,86 +209,27 @@ class _ScanResultDialogState extends State<ScanResultDialog> {
                 side: BorderSide(color: Colors.indigo.shade200),
                 visualDensity: VisualDensity.compact,
               ),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+              decoration: BoxDecoration(
+                color: Colors.grey.shade200,
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Text(
+                'Scanned Count: ${provider.markedCount} / ${provider.totalCount}',
+                style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.grey.shade800),
+              ),
+            ),
           ],
         ),
 
         const SizedBox(height: 16),
 
-        // Pricing Container
-        Container(
-          padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(
-            color: Colors.green.shade50,
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: Colors.green.shade300),
-          ),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text(
-                    'PROMO / DISCOUNT PRICE',
-                    style: TextStyle(
-                      fontSize: 11,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.green,
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    item.discountPrice != null
-                        ? '\$${item.discountPrice!.toStringAsFixed(2)}'
-                        : 'DISCOUNTED',
-                    style: TextStyle(
-                      fontSize: 28,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.green.shade900,
-                    ),
-                  ),
-                ],
-              ),
-              if (item.originalPrice != null) ...[
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.end,
-                  children: [
-                    const Text(
-                      'ORIGINAL PRICE',
-                      style: TextStyle(fontSize: 11, color: Colors.grey),
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      '\$${item.originalPrice!.toStringAsFixed(2)}',
-                      style: const TextStyle(
-                        fontSize: 18,
-                        decoration: TextDecoration.lineThrough,
-                        color: Colors.grey,
-                      ),
-                    ),
-                    if (item.savingsAmount != null && item.savingsAmount! > 0)
-                      Container(
-                        margin: const EdgeInsets.only(top: 4),
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                        decoration: BoxDecoration(
-                          color: Colors.red.shade700,
-                          borderRadius: BorderRadius.circular(10),
-                        ),
-                        child: Text(
-                          'Save \$${item.savingsAmount!.toStringAsFixed(2)}',
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 11,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                      ),
-                  ],
-                ),
-              ],
-            ],
-          ),
-        ),
+        // Discount Mode vs General Inventory Mode View
+        if (isDiscount)
+          _buildDiscountPricingCard(item)
+        else
+          _buildGeneralInventoryCard(item),
 
         const SizedBox(height: 16),
 
@@ -328,6 +274,157 @@ class _ScanResultDialogState extends State<ScanResultDialog> {
     );
   }
 
+  Widget _buildDiscountPricingCard(SkuItem item) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.green.shade50,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.green.shade300),
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'PROMO / DISCOUNT PRICE',
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.green,
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                item.discountPrice != null
+                    ? '\$${item.discountPrice!.toStringAsFixed(2)}'
+                    : 'DISCOUNTED',
+                style: TextStyle(
+                  fontSize: 28,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.green.shade900,
+                ),
+              ),
+            ],
+          ),
+          if (item.originalPrice != null) ...[
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                const Text(
+                  'ORIGINAL PRICE',
+                  style: TextStyle(fontSize: 11, color: Colors.grey),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  '\$${item.originalPrice!.toStringAsFixed(2)}',
+                  style: const TextStyle(
+                    fontSize: 18,
+                    decoration: TextDecoration.lineThrough,
+                    color: Colors.grey,
+                  ),
+                ),
+                if (item.savingsAmount != null && item.savingsAmount! > 0)
+                  Container(
+                    margin: const EdgeInsets.only(top: 4),
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: Colors.red.shade700,
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Text(
+                      'Save \$${item.savingsAmount!.toStringAsFixed(2)}',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 11,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildGeneralInventoryCard(SkuItem item) {
+    final rawData = item.rawData;
+
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.blue.shade50,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.blue.shade200),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.inventory_2, color: Colors.blue.shade800, size: 18),
+              const SizedBox(width: 8),
+              Text(
+                'ITEM DETAILS (${rawData.length} Attributes)',
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.blue.shade900,
+                  letterSpacing: 0.5,
+                ),
+              ),
+            ],
+          ),
+          const Divider(height: 16),
+          if (rawData.isEmpty)
+            const Text('No additional attributes found in file.', style: TextStyle(color: Colors.grey, fontSize: 13))
+          else
+            Container(
+              constraints: const BoxConstraints(maxHeight: 180),
+              child: SingleChildScrollView(
+                child: Table(
+                  columnWidths: const {
+                    0: FlexColumnWidth(1.2),
+                    1: FlexColumnWidth(2.0),
+                  },
+                  children: [
+                    for (final entry in rawData.entries)
+                      if (entry.value.toString().trim().isNotEmpty)
+                        TableRow(
+                          children: [
+                            Padding(
+                              padding: const EdgeInsets.symmetric(vertical: 4.0),
+                              child: Text(
+                                entry.key,
+                                style: TextStyle(
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 12,
+                                  color: Colors.blue.shade900,
+                                ),
+                              ),
+                            ),
+                            Padding(
+                              padding: const EdgeInsets.symmetric(vertical: 4.0),
+                              child: Text(
+                                entry.value.toString(),
+                                style: const TextStyle(fontSize: 13, color: Colors.black87),
+                              ),
+                            ),
+                          ],
+                        ),
+                  ],
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildNoMatchDetails(BuildContext context) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.center,
@@ -335,13 +432,13 @@ class _ScanResultDialogState extends State<ScanResultDialog> {
         const Icon(Icons.search_off_rounded, size: 56, color: Colors.amber),
         const SizedBox(height: 12),
         const Text(
-          'Item Not Listed in Discount File',
+          'Item Not Listed in Dataset',
           style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
           textAlign: TextAlign.center,
         ),
         const SizedBox(height: 8),
         Text(
-          'Barcode "${widget.barcode}" was not found in the currently loaded store spreadsheet.',
+          'Barcode "${widget.barcode}" was not found in the active spreadsheet file.',
           style: const TextStyle(color: Colors.grey, fontSize: 14),
           textAlign: TextAlign.center,
         ),
@@ -359,7 +456,7 @@ class _ScanResultDialogState extends State<ScanResultDialog> {
               SizedBox(width: 10),
               Expanded(
                 child: Text(
-                  'Verify item tag or check if an updated Excel/CSV file needs to be imported.',
+                  'Verify item tag or check if a new Excel/CSV dataset file needs to be imported.',
                   style: TextStyle(fontSize: 12, color: Colors.black87),
                 ),
               ),

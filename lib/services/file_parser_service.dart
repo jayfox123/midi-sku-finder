@@ -2,24 +2,39 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:csv/csv.dart';
 import 'package:excel/excel.dart';
+import 'package:file_picker/file_picker.dart';
 import '../models/column_mapping.dart';
 import '../models/sku_item.dart';
 
 class FileParseResult {
+  final String filePath;
   final List<String> headers;
   final List<List<dynamic>> sampleRows;
   final String fileName;
   final int estimatedRowCount;
 
   FileParseResult({
+    required this.filePath,
     required this.headers,
     required this.sampleRows,
     required this.fileName,
     required this.estimatedRowCount,
   });
+
+  int get totalRowsEstimate => estimatedRowCount;
 }
 
 class FileParserService {
+  /// Open file picker and inspect headers + preview rows.
+  static Future<FileParseResult?> pickAndInspectFile() async {
+    final result = await FilePicker.platform.pickFiles(
+      type: FileType.custom,
+      allowedExtensions: ['xlsx', 'xls', 'csv'],
+    );
+    if (result == null || result.files.single.path == null) return null;
+    return await inspectFile(result.files.single.path!);
+  }
+
   /// Reads headers and sample preview rows from CSV or Excel file.
   static Future<FileParseResult> inspectFile(String filePath) async {
     final file = File(filePath);
@@ -27,13 +42,13 @@ class FileParserService {
     final isCsv = fileName.toLowerCase().endsWith('.csv');
 
     if (isCsv) {
-      return _inspectCsv(file, fileName);
+      return _inspectCsv(file, fileName, filePath);
     } else {
-      return _inspectExcel(file, fileName);
+      return _inspectExcel(file, fileName, filePath);
     }
   }
 
-  static Future<FileParseResult> _inspectCsv(File file, String fileName) async {
+  static Future<FileParseResult> _inspectCsv(File file, String fileName, String filePath) async {
     final input = file.openRead();
     final fields = await input
         .transform(utf8.decoder)
@@ -54,6 +69,7 @@ class FileParserService {
     if (estRows < fields.length) estRows = fields.length;
 
     return FileParseResult(
+      filePath: filePath,
       headers: headers,
       sampleRows: sampleRows,
       fileName: fileName,
@@ -61,7 +77,7 @@ class FileParserService {
     );
   }
 
-  static Future<FileParseResult> _inspectExcel(File file, String fileName) async {
+  static Future<FileParseResult> _inspectExcel(File file, String fileName, String filePath) async {
     final bytes = await file.readAsBytes();
     final excel = Excel.decodeBytes(bytes);
 
@@ -72,23 +88,23 @@ class FileParserService {
     final sheetName = excel.tables.keys.first;
     final table = excel.tables[sheetName]!;
 
-    if (table.maxRows == 0) {
+    if (table.rows.isEmpty) {
       throw Exception('Excel sheet is empty');
     }
 
-    final firstRow = table.rows.first;
-    final headers = firstRow.map((cell) => cell?.value?.toString().trim() ?? '').toList();
-
-    List<List<dynamic>> sampleRows = [];
-    for (int r = 1; r < table.rows.length && r < 10; r++) {
-      sampleRows.add(table.rows[r].map((cell) => cell?.value?.toString() ?? '').toList());
-    }
+    final headers = table.rows.first.map((cell) => cell?.value?.toString().trim() ?? '').toList();
+    final sampleRows = table.rows
+        .skip(1)
+        .take(10)
+        .map((row) => row.map((cell) => cell?.value?.toString() ?? '').toList())
+        .toList();
 
     return FileParseResult(
+      filePath: filePath,
       headers: headers,
       sampleRows: sampleRows,
       fileName: fileName,
-      estimatedRowCount: table.maxRows - 1,
+      estimatedRowCount: table.rows.length - 1,
     );
   }
 
@@ -189,18 +205,31 @@ class FileParserService {
     String rawBarcode = row[mapping.barcodeColIndex]?.toString().trim() ?? '';
     if (rawBarcode.isEmpty) return null;
 
-    String title = _getStringValue(row, mapping.titleColIndex, fallback: 'Item $rawBarcode');
+    Map<String, dynamic> rawData = {};
+    for (int c = 0; c < row.length && c < headers.length; c++) {
+      String headerName = headers[c].trim().isNotEmpty ? headers[c].trim() : 'Col ${c + 1}';
+      rawData[headerName] = row[c]?.toString().trim() ?? '';
+    }
+
+    String title = _getStringValue(row, mapping.titleColIndex);
+    if (title.isEmpty) {
+      // Find first non-empty text column that isn't the barcode column
+      for (int c = 0; c < row.length; c++) {
+        if (c != mapping.barcodeColIndex) {
+          String val = row[c]?.toString().trim() ?? '';
+          if (val.isNotEmpty && !RegExp(r'^\d{8,14}$').hasMatch(val)) {
+            title = val;
+            break;
+          }
+        }
+      }
+      if (title.isEmpty) title = 'Item $rawBarcode';
+    }
+
     String category = _getStringValue(row, mapping.categoryColIndex);
     double? origPrice = _parsePrice(row, mapping.originalPriceColIndex);
     double? discPrice = _parsePrice(row, mapping.discountPriceColIndex);
     String location = _getStringValue(row, mapping.locationNotesColIndex);
-
-    Map<String, dynamic> rawData = {};
-    for (int c = 0; c < row.length && c < headers.length; c++) {
-      if (headers[c].isNotEmpty) {
-        rawData[headers[c]] = row[c]?.toString() ?? '';
-      }
-    }
 
     return SkuItem(
       barcode: rawBarcode,

@@ -5,20 +5,24 @@ class ColumnMapping {
   int originalPriceColIndex;
   int discountPriceColIndex;
   int locationNotesColIndex;
+  bool forceGeneralMode;
 
   ColumnMapping({
-    this.barcodeColIndex = -1,
+    this.barcodeColIndex = 0,
     this.titleColIndex = -1,
     this.categoryColIndex = -1,
     this.originalPriceColIndex = -1,
     this.discountPriceColIndex = -1,
     this.locationNotesColIndex = -1,
+    this.forceGeneralMode = false,
   });
 
   bool get isValid => barcodeColIndex >= 0;
 
-  /// Attempt auto-detection of column indices based on header names.
-  factory ColumnMapping.autoDetect(List<String> headers) {
+  bool get isDiscountMode => !forceGeneralMode && (discountPriceColIndex >= 0 || originalPriceColIndex >= 0);
+
+  /// Attempt auto-detection of column indices based on header names and sample rows.
+  factory ColumnMapping.autoDetect(List<String> headers, {List<List<dynamic>>? sampleRows}) {
     int barcodeIdx = -1;
     int titleIdx = -1;
     int categoryIdx = -1;
@@ -36,6 +40,9 @@ class ColumnMapping {
            h.contains('ean') ||
            h.contains('item #') ||
            h.contains('item_num') ||
+           h.contains('item code') ||
+           h.contains('part #') ||
+           h.contains('id') ||
            h.contains('code'))) {
         barcodeIdx = i;
       } else if (titleIdx == -1 &&
@@ -74,9 +81,32 @@ class ColumnMapping {
            h.contains('shelf') ||
            h.contains('note') ||
            h.contains('bin') ||
-           h.contains('rack'))) {
+           h.contains('rack') ||
+           h.contains('qty') ||
+           h.contains('stock'))) {
         notesIdx = i;
       }
+    }
+
+    // Fallback: If no barcode header matched, inspect sample rows for numeric strings
+    if (barcodeIdx == -1 && sampleRows != null && sampleRows.isNotEmpty) {
+      for (int c = 0; c < headers.length; c++) {
+        for (final row in sampleRows) {
+          if (c < row.length) {
+            String val = row[c]?.toString().trim() ?? '';
+            if (RegExp(r'^\d{6,14}$').hasMatch(val)) {
+              barcodeIdx = c;
+              break;
+            }
+          }
+        }
+        if (barcodeIdx != -1) break;
+      }
+    }
+
+    // Ultimate fallback: column 0 if headers exist
+    if (barcodeIdx == -1 && headers.isNotEmpty) {
+      barcodeIdx = 0;
     }
 
     // Fallbacks if price columns overlap

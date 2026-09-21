@@ -1,4 +1,3 @@
-import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../models/column_mapping.dart';
@@ -16,31 +15,23 @@ class _FileUploadScreenState extends State<FileUploadScreen> {
   String? _selectedFilePath;
   FileParseResult? _parseResult;
   ColumnMapping _mapping = ColumnMapping();
+
   bool _isInspecting = false;
   String? _errorMessage;
 
   Future<void> _pickFile() async {
     setState(() {
-      _errorMessage = null;
       _isInspecting = true;
+      _errorMessage = null;
     });
 
     try {
-      final result = await FilePicker.platform.pickFiles(
-        type: FileType.custom,
-        allowedExtensions: ['csv', 'xlsx', 'xls'],
-        allowMultiple: false,
-      );
-
-      if (result != null && result.files.isNotEmpty && result.files.single.path != null) {
-        final path = result.files.single.path!;
-        final inspected = await FileParserService.inspectFile(path);
-        final autoMapping = ColumnMapping.autoDetect(inspected.headers);
-
+      final result = await FileParserService.pickAndInspectFile();
+      if (result != null) {
         setState(() {
-          _selectedFilePath = path;
-          _parseResult = inspected;
-          _mapping = autoMapping;
+          _selectedFilePath = result.filePath;
+          _parseResult = result;
+          _mapping = ColumnMapping.autoDetect(result.headers, sampleRows: result.sampleRows);
           _isInspecting = false;
         });
       } else {
@@ -70,17 +61,21 @@ class _FileUploadScreenState extends State<FileUploadScreen> {
     }
 
     final provider = Provider.of<SkuProvider>(context, listen: false);
+    final barcodeHeader = (_mapping.barcodeColIndex >= 0 && _mapping.barcodeColIndex < _parseResult!.headers.length)
+        ? _parseResult!.headers[_mapping.barcodeColIndex]
+        : 'Barcode/SKU';
 
     final success = await provider.importFile(
       filePath: _selectedFilePath!,
       mapping: _mapping,
       fileName: _parseResult!.fileName,
+      barcodeHeader: barcodeHeader,
     );
 
     if (mounted && success) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('Successfully loaded ${provider.totalCount} items!'),
+          content: Text('Successfully loaded ${provider.totalCount} items in ${provider.activeModeLabel}!'),
           backgroundColor: Colors.green.shade800,
         ),
       );
@@ -103,226 +98,332 @@ class _FileUploadScreenState extends State<FileUploadScreen> {
             : SingleChildScrollView(
                 padding: const EdgeInsets.all(16.0),
                 child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  // File Picker Section
-                  Card(
-                    elevation: 2,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                    child: Padding(
-                      padding: const EdgeInsets.all(16.0),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          const Text(
-                            'Step 1: Select Spreadsheet File',
-                            style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-                          ),
-                          const SizedBox(height: 8),
-                          Text(
-                            'Supports .xlsx, .xls and .csv formats (up to 100,000+ SKUs)',
-                            style: TextStyle(color: Colors.grey.shade600, fontSize: 13),
-                          ),
-                          const SizedBox(height: 16),
-                          ElevatedButton.icon(
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: Colors.blue.shade700,
-                              foregroundColor: Colors.white,
-                              padding: const EdgeInsets.symmetric(vertical: 14),
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(10),
-                              ),
-                            ),
-                            icon: _isInspecting
-                                ? const SizedBox(
-                                    width: 20,
-                                    height: 20,
-                                    child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2),
-                                  )
-                                : const Icon(Icons.file_open),
-                            label: Text(
-                              _selectedFilePath != null ? 'Change File' : 'Browse Files (.xlsx / .csv)',
-                              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-                            ),
-                            onPressed: _isInspecting ? null : _pickFile,
-                          ),
-                          if (_selectedFilePath != null && _parseResult != null) ...[
-                            const SizedBox(height: 12),
-                            Container(
-                              padding: const EdgeInsets.all(12),
-                              decoration: BoxDecoration(
-                                color: Colors.green.shade50,
-                                borderRadius: BorderRadius.circular(8),
-                                border: Border.all(color: Colors.green.shade300),
-                              ),
-                              child: Row(
-                                children: [
-                                  Icon(Icons.insert_drive_file, color: Colors.green.shade800),
-                                  const SizedBox(width: 10),
-                                  Expanded(
-                                    child: Column(
-                                      crossAxisAlignment: CrossAxisAlignment.start,
-                                      children: [
-                                        Text(
-                                          _parseResult!.fileName,
-                                          style: TextStyle(
-                                            fontWeight: FontWeight.bold,
-                                            color: Colors.green.shade900,
-                                          ),
-                                          maxLines: 1,
-                                          overflow: TextOverflow.ellipsis,
-                                        ),
-                                        Text(
-                                          'Found ${_parseResult!.headers.length} columns (~${_parseResult!.estimatedRowCount} estimated rows)',
-                                          style: TextStyle(
-                                            fontSize: 12,
-                                            color: Colors.green.shade800,
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ],
-                          if (_errorMessage != null) ...[
-                            const SizedBox(height: 12),
-                            Text(
-                              _errorMessage!,
-                              style: const TextStyle(color: Colors.red, fontSize: 13),
-                            ),
-                          ],
-                        ],
-                      ),
-                    ),
-                  ),
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    // Active Loaded File Summary Card
+                    if (provider.hasDataset) _buildActiveFileCard(context, provider),
 
-                  if (_parseResult != null) ...[
-                    const SizedBox(height: 20),
+                    const SizedBox(height: 12),
 
-                    // Column Mapping Section
+                    // File Picker Section
                     Card(
                       elevation: 2,
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                       child: Padding(
                         padding: const EdgeInsets.all(16.0),
                         child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
                           children: [
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                              children: [
-                                const Text(
-                                  'Step 2: Map File Columns',
-                                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-                                ),
-                                TextButton.icon(
-                                  icon: const Icon(Icons.auto_awesome, size: 18),
-                                  label: const Text('Auto Detect'),
-                                  onPressed: () {
-                                    setState(() {
-                                      _mapping = ColumnMapping.autoDetect(_parseResult!.headers);
-                                    });
-                                  },
-                                ),
-                              ],
-                            ),
                             const Text(
-                              'Assign columns from your file to the application fields:',
-                              style: TextStyle(color: Colors.grey, fontSize: 13),
+                              'Step 1: Select Spreadsheet File',
+                              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                            ),
+                            const SizedBox(height: 8),
+                            Text(
+                              'Supports universal .xlsx, .xls and .csv formats (up to 100,000+ SKUs)',
+                              style: TextStyle(color: Colors.grey.shade600, fontSize: 13),
                             ),
                             const SizedBox(height: 16),
-
-                            _buildDropdownField(
-                              label: 'Barcode / SKU Column *',
-                              icon: Icons.qr_code,
-                              isRequired: true,
-                              selectedIndex: _mapping.barcodeColIndex,
-                              onChanged: (val) {
-                                setState(() {
-                                  _mapping.barcodeColIndex = val ?? -1;
-                                });
-                              },
+                            ElevatedButton.icon(
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: Colors.blue.shade700,
+                                foregroundColor: Colors.white,
+                                padding: const EdgeInsets.symmetric(vertical: 14),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(10),
+                                ),
+                              ),
+                              icon: _isInspecting
+                                  ? const SizedBox(
+                                      width: 20,
+                                      height: 20,
+                                      child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2),
+                                    )
+                                  : const Icon(Icons.file_open),
+                              label: Text(
+                                _selectedFilePath != null ? 'Change File' : 'Browse Files (.xlsx / .csv)',
+                                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                              ),
+                              onPressed: _isInspecting ? null : _pickFile,
                             ),
-                            _buildDropdownField(
-                              label: 'Product Title / Description',
-                              icon: Icons.title,
-                              selectedIndex: _mapping.titleColIndex,
-                              onChanged: (val) {
-                                setState(() {
-                                  _mapping.titleColIndex = val ?? -1;
-                                });
-                              },
-                            ),
-                            _buildDropdownField(
-                              label: 'Department / Category',
-                              icon: Icons.category,
-                              selectedIndex: _mapping.categoryColIndex,
-                              onChanged: (val) {
-                                setState(() {
-                                  _mapping.categoryColIndex = val ?? -1;
-                                });
-                              },
-                            ),
-                            _buildDropdownField(
-                              label: 'Original Price (Old Price)',
-                              icon: Icons.money_off,
-                              selectedIndex: _mapping.originalPriceColIndex,
-                              onChanged: (val) {
-                                setState(() {
-                                  _mapping.originalPriceColIndex = val ?? -1;
-                                });
-                              },
-                            ),
-                            _buildDropdownField(
-                              label: 'Discount / Promo Sale Price',
-                              icon: Icons.sell,
-                              selectedIndex: _mapping.discountPriceColIndex,
-                              onChanged: (val) {
-                                setState(() {
-                                  _mapping.discountPriceColIndex = val ?? -1;
-                                });
-                              },
-                            ),
-                            _buildDropdownField(
-                              label: 'Location / Aisle / Notes',
-                              icon: Icons.place,
-                              selectedIndex: _mapping.locationNotesColIndex,
-                              onChanged: (val) {
-                                setState(() {
-                                  _mapping.locationNotesColIndex = val ?? -1;
-                                });
-                              },
-                            ),
+                            if (_selectedFilePath != null && _parseResult != null) ...[
+                              const SizedBox(height: 12),
+                              Container(
+                                padding: const EdgeInsets.all(12),
+                                decoration: BoxDecoration(
+                                  color: Colors.green.shade50,
+                                  borderRadius: BorderRadius.circular(8),
+                                  border: Border.all(color: Colors.green.shade300),
+                                ),
+                                child: Row(
+                                  children: [
+                                    Icon(Icons.insert_drive_file, color: Colors.green.shade800),
+                                    const SizedBox(width: 10),
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        children: [
+                                          Text(
+                                            _parseResult!.fileName,
+                                            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+                                            overflow: TextOverflow.ellipsis,
+                                          ),
+                                          Text(
+                                            'Detected ~${_parseResult!.totalRowsEstimate} rows • ${_parseResult!.headers.length} columns',
+                                            style: TextStyle(color: Colors.grey.shade700, fontSize: 12),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                            if (_errorMessage != null) ...[
+                              const SizedBox(height: 12),
+                              Text(
+                                _errorMessage!,
+                                style: const TextStyle(color: Colors.red, fontSize: 13),
+                              ),
+                            ],
                           ],
                         ),
                       ),
                     ),
 
-                    const SizedBox(height: 24),
+                    if (_parseResult != null) ...[
+                      const SizedBox(height: 16),
 
-                    // Import Button
-                    ElevatedButton.icon(
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.green.shade700,
-                        foregroundColor: Colors.white,
-                        padding: const EdgeInsets.symmetric(vertical: 16),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12),
+                      // Column Mapping & Scan Mode Section
+                      Card(
+                        elevation: 2,
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                        child: Padding(
+                          padding: const EdgeInsets.all(16.0),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              Row(
+                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                children: [
+                                  const Text(
+                                    'Step 2: Map Columns & Scan Mode',
+                                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                                  ),
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                                    decoration: BoxDecoration(
+                                      color: _mapping.isDiscountMode ? Colors.green.shade100 : Colors.blue.shade100,
+                                      borderRadius: BorderRadius.circular(12),
+                                    ),
+                                    child: Text(
+                                      _mapping.isDiscountMode ? 'Discount Mode' : 'General Inventory',
+                                      style: TextStyle(
+                                        fontSize: 11,
+                                        fontWeight: FontWeight.bold,
+                                        color: _mapping.isDiscountMode ? Colors.green.shade900 : Colors.blue.shade900,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 8),
+                              const Text(
+                                'Select which column contains product Barcodes/SKUs. Other columns will be imported dynamically.',
+                                style: TextStyle(color: Colors.grey, fontSize: 12),
+                              ),
+                              const SizedBox(height: 16),
+
+                              // Barcode Dropdown (REQUIRED)
+                              _buildDropdownField(
+                                label: 'Barcode / SKU Column',
+                                icon: Icons.qr_code,
+                                selectedIndex: _mapping.barcodeColIndex,
+                                isRequired: true,
+                                onChanged: (val) {
+                                  setState(() {
+                                    _mapping.barcodeColIndex = val ?? -1;
+                                  });
+                                },
+                              ),
+
+                              const SizedBox(height: 12),
+
+                              // Mode Switch / Discount toggle
+                              SwitchListTile(
+                                contentPadding: EdgeInsets.zero,
+                                title: const Text(
+                                  'Enable Promo / Discount Pricing Card',
+                                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+                                ),
+                                subtitle: const Text(
+                                  'Turn off for general inventory audits (quantity, aisle, supplier details)',
+                                  style: TextStyle(fontSize: 12, color: Colors.grey),
+                                ),
+                                value: _mapping.isDiscountMode,
+                                activeThumbColor: Colors.teal,
+                                onChanged: (val) {
+                                  setState(() {
+                                    _mapping.forceGeneralMode = !val;
+                                  });
+                                },
+                              ),
+
+                              const Divider(height: 24),
+
+                              if (_mapping.isDiscountMode) ...[
+                                // Optional Title / Description Column
+                                _buildDropdownField(
+                                  label: 'Description / Item Title',
+                                  icon: Icons.title,
+                                  selectedIndex: _mapping.titleColIndex,
+                                  onChanged: (val) {
+                                    setState(() {
+                                      _mapping.titleColIndex = val ?? -1;
+                                    });
+                                  },
+                                ),
+                                const SizedBox(height: 12),
+
+                                // Optional Discount Price Column
+                                _buildDropdownField(
+                                  label: 'Promo / Sale Price',
+                                  icon: Icons.sell,
+                                  selectedIndex: _mapping.discountPriceColIndex,
+                                  onChanged: (val) {
+                                    setState(() {
+                                      _mapping.discountPriceColIndex = val ?? -1;
+                                    });
+                                  },
+                                ),
+                                const SizedBox(height: 12),
+
+                                // Optional Original Price Column
+                                _buildDropdownField(
+                                  label: 'Original / MSRP Price',
+                                  icon: Icons.price_change,
+                                  selectedIndex: _mapping.originalPriceColIndex,
+                                  onChanged: (val) {
+                                    setState(() {
+                                      _mapping.originalPriceColIndex = val ?? -1;
+                                    });
+                                  },
+                                ),
+                                const SizedBox(height: 12),
+                              ],
+
+                              const SizedBox(height: 12),
+
+                              ElevatedButton.icon(
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: Colors.green.shade700,
+                                  foregroundColor: Colors.white,
+                                  padding: const EdgeInsets.symmetric(vertical: 16),
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(10),
+                                  ),
+                                ),
+                                icon: const Icon(Icons.download_for_offline),
+                                label: Text(
+                                  'INDEX ${_parseResult!.totalRowsEstimate}+ ITEMS FOR SCANNING',
+                                  style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
+                                ),
+                                onPressed: _startImport,
+                              ),
+                            ],
+                          ),
                         ),
                       ),
-                      icon: const Icon(Icons.bolt, size: 24),
-                      label: const Text(
-                        'IMPORT & LOAD DATASET',
-                        style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                    ],
+                  ],
+                ),
+              ),
+      ),
+    );
+  }
+
+  Widget _buildActiveFileCard(BuildContext context, SkuProvider provider) {
+    return Card(
+      elevation: 2,
+      color: Colors.teal.shade50,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: BorderSide(color: Colors.teal.shade200),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Row(
+                  children: [
+                    Icon(Icons.storage, color: Colors.teal.shade800),
+                    const SizedBox(width: 8),
+                    Text(
+                      'Currently Active Dataset',
+                      style: TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.teal.shade900,
                       ),
-                      onPressed: _startImport,
                     ),
                   ],
-                ],
-              ),
+                ),
+                TextButton.icon(
+                  style: TextButton.styleFrom(
+                    foregroundColor: Colors.red.shade700,
+                    visualDensity: VisualDensity.compact,
+                  ),
+                  icon: const Icon(Icons.delete_outline, size: 18),
+                  label: const Text('Clear File'),
+                  onPressed: () => _confirmClearFile(context, provider),
+                ),
+              ],
             ),
+            const SizedBox(height: 8),
+            Text(
+              provider.fileName,
+              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 4),
+            Row(
+              children: [
+                Text(
+                  '${provider.totalCount} items loaded • Barcode Column: ${provider.detectedBarcodeHeader}',
+                  style: TextStyle(fontSize: 12, color: Colors.teal.shade800),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _confirmClearFile(BuildContext context, SkuProvider provider) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Clear Active Dataset?'),
+        content: const Text('This will remove all cached SKUs and reset the scanner.'),
+        actions: [
+          TextButton(
+            child: const Text('CANCEL'),
+            onPressed: () => Navigator.pop(ctx),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+            child: const Text('CLEAR FILE', style: TextStyle(color: Colors.white)),
+            onPressed: () async {
+              Navigator.pop(ctx);
+              await provider.clearDataset();
+              if (mounted) setState(() {});
+            },
+          ),
+        ],
       ),
     );
   }
@@ -336,85 +437,73 @@ class _FileUploadScreenState extends State<FileUploadScreen> {
   }) {
     final headers = _parseResult?.headers ?? [];
 
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 14.0),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Icon(icon, size: 18, color: isRequired ? Colors.red.shade700 : Colors.grey.shade700),
-              const SizedBox(width: 6),
-              Text(
-                label,
-                style: TextStyle(
-                  fontWeight: isRequired ? FontWeight.bold : FontWeight.w500,
-                  color: isRequired ? Colors.red.shade800 : null,
-                  fontSize: 13,
-                ),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Icon(icon, size: 18, color: Colors.grey.shade700),
+            const SizedBox(width: 6),
+            Text(
+              label,
+              style: TextStyle(
+                fontWeight: FontWeight.w600,
+                fontSize: 14,
+                color: isRequired ? Colors.black87 : Colors.grey.shade800,
               ),
-            ],
-          ),
-          const SizedBox(height: 6),
-          DropdownButtonFormField<int>(
-            initialValue: selectedIndex >= 0 && selectedIndex < headers.length ? selectedIndex : null,
-            decoration: InputDecoration(
-              isDense: true,
-              contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-              border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
             ),
-            hint: const Text('-- Select Column --'),
-            items: [
+            if (isRequired)
+              const Text(' *', style: TextStyle(color: Colors.red, fontWeight: FontWeight.bold)),
+          ],
+        ),
+        const SizedBox(height: 6),
+        DropdownButtonFormField<int>(
+          initialValue: (selectedIndex >= 0 && selectedIndex < headers.length) ? selectedIndex : null,
+          decoration: InputDecoration(
+            contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+            hintText: isRequired ? 'Select Barcode Column' : 'Auto / Optional',
+          ),
+          items: [
+            if (!isRequired)
               const DropdownMenuItem<int>(
                 value: -1,
-                child: Text('-- None / Skip --', style: TextStyle(color: Colors.grey)),
+                child: Text('-- None / Ignore --', style: TextStyle(color: Colors.grey)),
               ),
-              for (int i = 0; i < headers.length; i++)
-                DropdownMenuItem<int>(
-                  value: i,
-                  child: Text(
-                    'Col ${i + 1}: ${headers[i]}',
-                    overflow: TextOverflow.ellipsis,
-                  ),
+            for (int i = 0; i < headers.length; i++)
+              DropdownMenuItem<int>(
+                value: i,
+                child: Text(
+                  '${headers[i].isNotEmpty ? headers[i] : 'Column ${i + 1}'}  (Col ${i + 1})',
+                  overflow: TextOverflow.ellipsis,
                 ),
-            ],
-            onChanged: onChanged,
-          ),
-        ],
-      ),
+              ),
+          ],
+          onChanged: onChanged,
+        ),
+      ],
     );
   }
 
   Widget _buildImportProgressView(SkuProvider provider) {
-    return Padding(
-      padding: const EdgeInsets.all(32.0),
-      child: Center(
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(32.0),
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            CircularProgressIndicator(
-              value: provider.importProgress > 0 ? provider.importProgress : null,
-              strokeWidth: 6,
-              color: Colors.green.shade700,
-            ),
+            const CircularProgressIndicator(strokeWidth: 4),
             const SizedBox(height: 24),
             Text(
               provider.importStatusMessage,
               style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
               textAlign: TextAlign.center,
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: 16),
             LinearProgressIndicator(
               value: provider.importProgress > 0 ? provider.importProgress : null,
-              minHeight: 8,
-              borderRadius: BorderRadius.circular(4),
-              color: Colors.green.shade700,
-            ),
-            const SizedBox(height: 16),
-            const Text(
-              'Optimizing SQLite database index for zero-latency lookups...',
-              style: TextStyle(color: Colors.grey, fontSize: 13),
-              textAlign: TextAlign.center,
+              minHeight: 10,
+              borderRadius: BorderRadius.circular(5),
             ),
           ],
         ),

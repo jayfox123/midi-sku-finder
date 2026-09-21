@@ -12,6 +12,8 @@ class SkuProvider extends ChangeNotifier {
   int _totalCount = 0;
   int _markedCount = 0;
   DateTime? _lastLoadedAt;
+  bool _isDiscountMode = true;
+  String _detectedBarcodeHeader = 'Barcode/SKU';
 
   bool _isImporting = false;
   double _importProgress = 0.0;
@@ -23,6 +25,9 @@ class SkuProvider extends ChangeNotifier {
   int get markedCount => _markedCount;
   DateTime? get lastLoadedAt => _lastLoadedAt;
   bool get hasDataset => _totalCount > 0;
+  bool get isDiscountMode => _isDiscountMode;
+  String get detectedBarcodeHeader => _detectedBarcodeHeader;
+  String get activeModeLabel => _isDiscountMode ? 'Discount Promo Mode' : 'General Inventory Audit';
 
   bool get isImporting => _isImporting;
   double get importProgress => _importProgress;
@@ -36,6 +41,8 @@ class SkuProvider extends ChangeNotifier {
   Future<void> loadSavedState() async {
     final prefs = await SharedPreferences.getInstance();
     _fileName = prefs.getString('sku_active_filename') ?? '';
+    _isDiscountMode = prefs.getBool('sku_is_discount_mode') ?? true;
+    _detectedBarcodeHeader = prefs.getString('sku_detected_barcode_header') ?? 'Barcode/SKU';
     final loadedStr = prefs.getString('sku_last_loaded_at');
     if (loadedStr != null) {
       _lastLoadedAt = DateTime.tryParse(loadedStr);
@@ -51,11 +58,20 @@ class SkuProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Toggle mode between Discount Promo and General Inventory.
+  Future<void> toggleMode(bool discountMode) async {
+    _isDiscountMode = discountMode;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('sku_is_discount_mode', discountMode);
+    notifyListeners();
+  }
+
   /// Import dataset from file.
   Future<bool> importFile({
     required String filePath,
     required ColumnMapping mapping,
     required String fileName,
+    String barcodeHeader = 'Barcode/SKU',
   }) async {
     _isImporting = true;
     _importProgress = 0.0;
@@ -98,10 +114,14 @@ class SkuProvider extends ChangeNotifier {
       final now = DateTime.now();
       _fileName = fileName;
       _lastLoadedAt = now;
+      _isDiscountMode = mapping.isDiscountMode;
+      _detectedBarcodeHeader = barcodeHeader;
 
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString('sku_active_filename', fileName);
       await prefs.setString('sku_last_loaded_at', now.toIso8601String());
+      await prefs.setBool('sku_is_discount_mode', _isDiscountMode);
+      await prefs.setString('sku_detected_barcode_header', barcodeHeader);
 
       await refreshStats();
 
@@ -140,6 +160,8 @@ class SkuProvider extends ChangeNotifier {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove('sku_active_filename');
     await prefs.remove('sku_last_loaded_at');
+    await prefs.remove('sku_is_discount_mode');
+    await prefs.remove('sku_detected_barcode_header');
 
     await refreshStats();
   }
